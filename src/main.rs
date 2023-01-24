@@ -46,6 +46,8 @@ enum Token {
     CurlyEnd,
     SemiColon,
     Comma,
+    Colon,
+    Comment,
 }
 
 impl<T> Iterator for TokenProvider<T>
@@ -64,16 +66,56 @@ where
                         break;
                     }
                 }
-                Option::Some(Token::WhiteSpace)
+                // Option::Some(Token::WhiteSpace)
+                self.next()
             },
 
-            Option::Some(c) if c.is_ascii_digit() => Option::Some(Token::Number(1)),
-
-            Option::Some(c) if c.is_ascii_alphabetic() => Option::Some(Token::Symbol(c.to_string())),
-
+            Option::Some(c) if c.is_ascii_digit() => {
+                let mut num_str = c.to_string();
+                while let Option::Some(c) = self.char_provider.peek() {
+                    if c.is_ascii_digit() {
+                        num_str += &c.to_string();
+                        self.char_provider.next();
+                    } else {
+                        break;
+                    }
+                }
+                Option::Some(Token::Number(num_str.parse().expect(format!("Could not parse number {}", num_str).as_str())))
+            },
+            Option::Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+                let mut symbol_str = c.to_string();
+                while let Option::Some(c) = self.char_provider.peek() {
+                    if c.is_ascii_alphabetic() || c == &'_' {
+                        symbol_str += &c.to_string();
+                        self.char_provider.next();
+                    } else {
+                        break;
+                    }
+                }
+                Option::Some(Token::Symbol(symbol_str))
+            },
+            Option::Some(c) if c == '{' => Some(Token::CurlyStart),
+            Option::Some(c) if c == '}' => Some(Token::CurlyEnd),
+            Option::Some(c) if c == '#' => {
+                while let Option::Some(c) = self.char_provider.peek() {
+                    if c != &'#' {
+                        self.char_provider.next();
+                    } else {
+                        self.char_provider.next();
+                        break;
+                    }
+                }
+                // Option::Some(Token::Comment)
+                self.next()
+            },
+            Option::Some(c) if c == ':' => Some(Token::Colon),
+            Option::Some(c) if c == ';' => Some(Token::SemiColon),
+            Option::Some(c) if c == '(' => Some(Token::ParensStart),
+            Option::Some(c) if c == ')' => Some(Token::ParensEnd),
+            Option::Some(c) if "+-*/&|!=<>".contains(c) => Some(Token::Operator(c.to_string())),
             Option::None => Option::None,
 
-            _ => Option::Some(Token::SemiColon),
+            Option::Some(c) => panic!("Error parsing: {}", c),
         }
     }
 }
@@ -130,7 +172,7 @@ fn main() {
         .to_string(),
     };
 
-    text.data = "test this ;; ()".to_owned();
+    //text.data = "test this 77 ;; ()".to_owned();
     let mut lexer = TokenProvider::new(&mut text);
     lexer.for_each(|t| println!("{:?}", t))
 }
