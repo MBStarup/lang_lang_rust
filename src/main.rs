@@ -18,18 +18,18 @@ impl Iterator for CharProvider {
     }
 }
 
-struct TokenProvider<'a, T>
+struct TokenProvider<T>
 where
     T: Iterator<Item = char>,
 {
-    char_provider: std::iter::Peekable<&'a mut T>,
+    char_provider: std::iter::Peekable<T>,
 }
 
-impl<'a, T> TokenProvider<'a, T>
+impl<T> TokenProvider<T>
 where
     T: Iterator<Item = char>,
 {
-    fn new(char_provider: &'a mut T) -> TokenProvider<'a, T> {
+    fn new(char_provider: T) -> TokenProvider<T> {
         TokenProvider { char_provider: char_provider.peekable() }
     }
 }
@@ -48,7 +48,7 @@ enum Token {
     Comma,
 }
 
-impl<'a, T> Iterator for TokenProvider<'a, T>
+impl<T> Iterator for TokenProvider<T>
 where
     T: Iterator<Item = char>,
 {
