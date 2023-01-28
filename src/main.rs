@@ -282,7 +282,7 @@ fn compile_to_asm(entry: Expr) -> String {
                     result += "pop rdi\n"; //restore rdi
                     result
                 },
-                _ => ";TODO!".to_owned(),
+                o => todo!("operator: {o}"),
             },
             Expr::MultiExpr(exprs) => {
                 let mut result = ";MultiExpr\n".to_owned();
@@ -293,9 +293,9 @@ fn compile_to_asm(entry: Expr) -> String {
             },
             Expr::Eval(symbol) => {
                 // TODO: figure out what offset the symbol is in the current stack frame, and load the value into rax
-                "TODO!!".to_owned()
+                todo!("symbol evaluation")
             },
-            _ => "\nTODO!\n".to_owned(),
+            _ => todo!(),
 
             // TODO: later: figure out larger return values, see: https://stackoverflow.com/questions/24741218/how-c-compiler-treats-a-struct-return-value-from-a-function-in-asm
             Expr::Func(expr, symbol) => {
@@ -312,10 +312,17 @@ fn compile_to_asm(entry: Expr) -> String {
                 // TODO:    (ret)? idk, maybe just (jmp [rsp])?
                 // TODO: somehow move the pointer to this function code into rax... again, label?
 
-                todo!();
+                todo!("function definition");
                 // TODO: later: figure out closures / enclosed variables
             },
-            Expr::Call(exprs, symbol) => todo!(),
+            Expr::Call(exprs, symbol) => {
+                // TODO: move parameters on stack (or registers)
+                // TODO: move ret addres on stack
+                // TODO: jump to function
+                // TODO: <- ret addr here:
+                // TODO: clean params off stack
+                todo!("function call")
+            },
         }
     }
 
