@@ -295,6 +295,33 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
             },
             Expr::Eval(symbol) => {
                 // TODO: figure out what offset the symbol is in the current stack frame, and load the value into rax
+
+                // loads the variable at offset 8 in the CURRENT scope
+                // mov rax [rbp-8]
+
+                // loads the variable at offset 8 in the PARENT scope
+                // mov rax, [rbp]
+                // mov rax, [rax-8]
+
+                // -----This doesn't work, rethink it lule------
+
+                // loads the variable at offset 8 in the PARENTS PARENT  scope
+                // mov rax, [rbp]
+                // mov rax, [rax]
+                // mov rax, [rax-8]
+
+                // generalizing (replace 8 with offset)
+
+                // mov rax, rbp
+
+                //  ; repeat for each level of scope
+                // mov rax, [rax]
+
+                // ; then load
+                // mov rax, [rax-8]
+
+                // -----------------------------------------------
+
                 todo!("symbol evaluation")
             },
             // TODO: later: figure out larger return values, see: https://stackoverflow.com/questions/24741218/how-c-compiler-treats-a-struct-return-value-from-a-function-in-asm
@@ -330,6 +357,7 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                 result += &format!("end_{function_counter}:\n");
                 // TODO: somehow move the pointer to this function code into rax... again, label?
                 result += &format!("lea rax, [begin_{function_counter}]\n");
+                function_counter = function_counter - 1;
                 result
                 // TODO: later: figure out closures / enclosed variables
             },
@@ -469,7 +497,7 @@ fn main() {
 
     text.data = "
 {
-    ;; {3 + 5}
+    func: ;; { ;; {3 + 5}}
 }
     "
     .to_owned();
