@@ -1,5 +1,5 @@
 use core::panic;
-use std::{fmt::format, iter::Peekable, result};
+use std::{collections::VecDeque, iter::Peekable};
 
 struct CharProvider {
     position: usize,
@@ -109,7 +109,6 @@ where
 }
 #[derive(Debug, Clone)]
 enum Token {
-    WhiteSpace,
     Operator(String), // TODO: make an Operator enum instead of using strings lule
     ParensStart,
     ParensEnd,
@@ -118,9 +117,12 @@ enum Token {
     CurlyStart,
     CurlyEnd,
     SemiColon,
-    Comma,
     Colon,
+    /*
+    Comma,
+    WhiteSpace,
     Comment,
+    */
 }
 
 fn parse<'a, T: Iterator<Item = Token>>(tokens: T) -> Option<Expr> {
@@ -230,8 +232,10 @@ enum Expr {
     Call(Vec<Expr>, String),
 }
 
-fn compile_to_asm(entry: Expr) -> String {
+fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEntry>, i32)>) -> String {
     // TODO: better way to build strings pepela
+
+    static mut function_counter: u64 = 0; // TODO: be better
 
     let mut result = "
     ;compiled with rust lang lang compiler
@@ -245,22 +249,19 @@ fn compile_to_asm(entry: Expr) -> String {
     mov rbp, rsp ; move rbp to the to of the current stack, as anything before that is unrelated to our program, don't think this should actually do anything\n"
         .to_owned();
 
-    fn compile_to_asm_rec_helper(entry: Expr) -> String {
+    unsafe fn compile_to_asm_rec_helper(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEntry>, i32)>) -> String {
         match entry {
             Expr::Assign(expr, symbol) => {
                 // TODO: evaluate expr
-                let mut result = compile_to_asm_rec_helper(*expr);
+                let mut result = compile_to_asm_rec_helper(*expr, symbol_map);
 
                 // TODO: store at pointer location
                 result += "push rax\n";
 
                 // TODO: store pointer location in some sort of table by symbol
-                //table[sybol] = "[stack + 8]";
+                // Check that it's a new assignment
 
                 // TODO: advance stack by size of expr return value (always int so far)
-                // result += "
-
-                // ";
 
                 // TODO: make sure designated eval return register is set to the value (I think it shoul dbe already as that's the last thing we evaled but :shrug: make sure)
 
@@ -270,14 +271,15 @@ fn compile_to_asm(entry: Expr) -> String {
                 format!(";Number\nmov rax, {num }\n")
             },
             Expr::BiExpr(expr_1, expr_2, operator) => match operator {
+                // TODO: again, please just make the operators enums, this is pain
                 o if "+".contains(o.chars().next().unwrap()) => {
                     //* Sets RAX to the result, alters RBX, MAYBE BAD!
 
                     let mut result = ";Addition\n".to_owned();
                     result += "push rdi\n"; //cache rdi on stack
-                    result += &compile_to_asm_rec_helper(*expr_1);
+                    result += &compile_to_asm_rec_helper(*expr_1, symbol_map);
                     result += "mov rdi, rax\n"; //move rdi (result of expr_1) into rax
-                    result += &compile_to_asm_rec_helper(*expr_2);
+                    result += &compile_to_asm_rec_helper(*expr_2, symbol_map);
                     result += "add rax, rdi\n"; //add them and store in rax
                     result += "pop rdi\n"; //restore rdi
                     result
@@ -287,7 +289,7 @@ fn compile_to_asm(entry: Expr) -> String {
             Expr::MultiExpr(exprs) => {
                 let mut result = ";MultiExpr\n".to_owned();
                 for expr in exprs {
-                    result += &compile_to_asm_rec_helper(expr);
+                    result += &compile_to_asm_rec_helper(expr, symbol_map);
                 }
                 result
             },
@@ -295,24 +297,40 @@ fn compile_to_asm(entry: Expr) -> String {
                 // TODO: figure out what offset the symbol is in the current stack frame, and load the value into rax
                 todo!("symbol evaluation")
             },
-            _ => todo!(),
-
             // TODO: later: figure out larger return values, see: https://stackoverflow.com/questions/24741218/how-c-compiler-treats-a-struct-return-value-from-a-function-in-asm
             Expr::Func(expr, symbol) => {
+                let mut result = "; func\n".to_owned();
+                function_counter = function_counter + 1;
+                result += &format!("jmp end_{function_counter}\n");
+
                 // TODO: label?
-                // TODO: do some shit with the symbol table for fucntion params, should eb at some positive offset to rbp after we move it
+                result += &format!("begin_{function_counter}:\n");
+
+                // TODO: do some shit with the symbol table for fucntion params, should be at some positive offset to rbp after we move it
                 // TODO: make the function code:
+
                 // TODO:    save rbp (stack base pointer) (push rbp)
                 // TODO:    (mov rbp, rsp)
+                result += "push rbp\nmov rbp, rsp\n";
+
                 // TODO:    maybe backup non-volatile registers on the stack? or be smart about it somehow...
+
                 // TODO:    evaluate the expr (stores value in rax)
+                result += &compile_to_asm_rec_helper(*expr, symbol_map);
+
                 // TODO:    if touched non-volatile registers, restore them
+
                 // TODO:    restore rsp (stack top pointer) (mov rsp, rbp)
                 // TODO:    restore rbp (stack base pointer) (pop rbp) NOT (mov rbp, [rbp]) as that fucks rsp I think
-                // TODO:    (ret)? idk, maybe just (jmp [rsp])?
-                // TODO: somehow move the pointer to this function code into rax... again, label?
+                result += "mov rsp, rbp\npop rbp\n";
 
-                todo!("function definition");
+                // TODO:    (ret)? idk, maybe just (jmp [rsp])?
+                result += "ret\n";
+
+                result += &format!("end_{function_counter}:\n");
+                // TODO: somehow move the pointer to this function code into rax... again, label?
+                result += &format!("lea rax, [begin_{function_counter}]\n");
+                result
                 // TODO: later: figure out closures / enclosed variables
             },
             Expr::Call(exprs, symbol) => {
@@ -326,7 +344,10 @@ fn compile_to_asm(entry: Expr) -> String {
         }
     }
 
-    result += &compile_to_asm_rec_helper(entry);
+    unsafe {
+        // TODO: I am cringe
+        result += &compile_to_asm_rec_helper(entry, symbol_map);
+    }
 
     result += "
     mov rbp, rdi ; restore rbp from the value saved in rdi, again this is onyl usefull if the entire program is being invoked as a function or something idk... felt nice to include
@@ -335,6 +356,63 @@ fn compile_to_asm(entry: Expr) -> String {
     syscall ; invoke operating system to exit
     ";
     result
+}
+
+// struct LayeredHashMap<K, V>
+// where
+//     K: Eq + Hash,
+// {
+//     // to recurse or not to recurse
+//     map_stack: VecDeque<HashMap<K, V>>,
+// }
+
+// impl<K, V> LayeredHashMap<K, V>
+// where
+//     K: Eq + Hash,
+// {
+//     fn new() -> Self {
+//         Self { map_stack: VecDeque::new() }
+//     }
+// }
+
+// impl<K, V> LayeredHashMap<K, V>
+// where
+//     K: Eq + Hash,
+// {
+//     fn pop_layer(&mut self) -> Option<HashMap<K, V>> {
+//         self.map_stack.pop_front()
+//     }
+
+//     fn push_layer(&mut self) {
+//         self.map_stack.push_front(HashMap::new())
+//     }
+
+//     fn search(&mut self, key: K) -> Option<&V> {
+//         // why the fuck couldn't I figure out how to write this using find() and stuff??? BRUH 3 am moment
+//         let mut iter = self.map_stack.iter();
+//         while let Some(map) = iter.next() {
+//             if let Some(value) = map.get(&key) {
+//                 return Some(value);
+//             }
+//         }
+//         None
+//     }
+
+//     fn insert(&mut self, key: K, value: V) -> Option<()> {
+//         let mut iter = self.map_stack.iter_mut();
+//         match iter.next() {
+//             Some(map) => {
+//                 map.insert(key, value);
+//                 Some(())
+//             },
+//             None => None,
+//         }
+//     }
+// }
+
+struct SymbolTableEntry {
+    symbol: String,
+    position: i32,
 }
 
 #[allow(dead_code, unused, unused_mut)]
@@ -391,8 +469,7 @@ fn main() {
 
     text.data = "
 {
-    var_a: 2 + 60 
-    7 + 9 + 18+ 6 + 5+ 12
+    ;; {3 + 5}
 }
     "
     .to_owned();
@@ -400,6 +477,7 @@ fn main() {
     let mut lexer = TokenProvider::new(&mut text);
     let mut ast = parse(lexer).expect("Empty ast");
     println!("AST:\n{ast:?}\n");
-    let mut asm = compile_to_asm(ast);
+    let mut symbol_stack: VecDeque<(VecDeque<SymbolTableEntry>, i32)> = VecDeque::new();
+    let mut asm = compile_to_asm(ast, &mut symbol_stack);
     println!("ASM:\n{asm}\n");
 }
