@@ -243,10 +243,7 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
         global    _start
 
         section   .text
-    _start:
-        
-    mov rdi, rbp ; save old stack base pointer in rbi, by my convention rbi is preserved after operations
-    mov rbp, rsp ; move rbp to the to of the current stack, as anything before that is unrelated to our program, don't think this should actually do anything\n"
+    _start:\n"
         .to_owned();
 
     unsafe fn compile_to_asm_rec_helper(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEntry>, i32)>) -> String {
@@ -255,13 +252,21 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                 // TODO: evaluate expr
                 let mut result = compile_to_asm_rec_helper(*expr, symbol_map);
 
-                // TODO: store at pointer location
-                result += "push rax\n";
-
-                // TODO: store pointer location in some sort of table by symbol
+                let scope = symbol_map.iter_mut().next().expect("No current scope");
                 // Check that it's a new assignment
+                if let Some(entry) = scope.0.iter().find(|x| x.symbol.eq(&symbol)) {
+                    // store value at exisitng location
+                    let offset = entry.position;
+                    result += &format!("mov [rbp{offset:+}], rax\n");
+                } else {
+                    // TODO: store at pointer location
+                    result += "push rax\n";
 
-                // TODO: advance stack by size of expr return value (always int so far)
+                    // TODO: store pointer location in some sort of table by symbol
+                    scope.1 += 1;
+                    let entry = SymbolTableEntry { symbol: symbol, position: scope.1 * -8 };
+                    scope.0.push_front(entry);
+                }
 
                 // TODO: make sure designated eval return register is set to the value (I think it shoul dbe already as that's the last thing we evaled but :shrug: make sure)
 
@@ -288,13 +293,28 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
             },
             Expr::MultiExpr(exprs) => {
                 let mut result = ";MultiExpr\n".to_owned();
+                symbol_map.push_front((VecDeque::new(), 0)); //new scope
+
+                result += "mov rdi, rbp\n";
+                result += "mov rbp, rsp\n";
+
                 for expr in exprs {
                     result += &compile_to_asm_rec_helper(expr, symbol_map);
                 }
+                result += "mov rbp, rdi\n";
+
+                symbol_map.pop_front();
                 result
             },
             Expr::Eval(symbol) => {
                 // TODO: figure out what offset the symbol is in the current stack frame, and load the value into rax
+
+                // only curr scope for now
+                let mut result = "; Symbol eval \n".to_owned();
+                let map = symbol_map.iter().next().expect("No current scope");
+                let offset = map.0.iter().find(|x| x.symbol.eq(&symbol)).expect(&format!("no symbol: {symbol} found in current scope")).position;
+
+                result += &format!("mov rax, [rbp{offset:+}]\n");
 
                 // loads the variable at offset 8 in the CURRENT scope
                 // mov rax [rbp-8]
@@ -304,6 +324,15 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                 // mov rax, [rax-8]
 
                 // -----This doesn't work, rethink it lule------
+                // but why?
+                // this loads the stacks in CALL order, not definition order...
+                // so:
+                // x: 60
+                // a: ;; {b: ;; {x + 9}}
+                // b()
+                // would mean that when x is read in b, it was only one scope above it's current
+                // as it's called straight from main, where x is defined
+                // as new rbp layers are only added on function call
 
                 // loads the variable at offset 8 in the PARENTS PARENT  scope
                 // mov rax, [rbp]
@@ -322,7 +351,7 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
 
                 // -----------------------------------------------
 
-                todo!("symbol evaluation")
+                result
             },
             // TODO: later: figure out larger return values, see: https://stackoverflow.com/questions/24741218/how-c-compiler-treats-a-struct-return-value-from-a-function-in-asm
             Expr::Func(expr, symbol) => {
@@ -338,7 +367,7 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
 
                 // TODO:    save rbp (stack base pointer) (push rbp)
                 // TODO:    (mov rbp, rsp)
-                result += "push rbp\nmov rbp, rsp\n";
+                // result += "push rbp\nmov rbp, rsp\n";
 
                 // TODO:    maybe backup non-volatile registers on the stack? or be smart about it somehow...
 
@@ -349,7 +378,7 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
 
                 // TODO:    restore rsp (stack top pointer) (mov rsp, rbp)
                 // TODO:    restore rbp (stack base pointer) (pop rbp) NOT (mov rbp, [rbp]) as that fucks rsp I think
-                result += "mov rsp, rbp\npop rbp\n";
+                // result += "mov rsp, rbp\npop rbp\n";
 
                 // TODO:    (ret)? idk, maybe just (jmp [rsp])?
                 result += "ret\n";
@@ -362,12 +391,33 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                 // TODO: later: figure out closures / enclosed variables
             },
             Expr::Call(exprs, symbol) => {
+                let mut result = "; func call \n".to_owned();
                 // TODO: move parameters on stack (or registers)
+                let mut param_count = 0;
+                for expr in exprs {
+                    //Reverse order I think but eh
+                    result += &compile_to_asm_rec_helper(expr, symbol_map);
+                    result += "push rax\n";
+                    param_count += 8;
+                }
+
                 // TODO: move ret addres on stack
                 // TODO: jump to function
                 // TODO: <- ret addr here:
+
+                //Stolen from the symbol eval TODO: consolidate
+                let map = symbol_map.iter().next().expect("No current scope");
+                let offset = map.0.iter().find(|x| x.symbol.eq(&symbol)).expect(&format!("no symbol: {symbol} found in current scope")).position;
+
+                result += &format!("mov rax, [rbp{offset:+}]\n");
+                //end stolen
+                result += "call rax\n";
+
                 // TODO: clean params off stack
-                todo!("function call")
+
+                result += &format!("add rsp, {param_count}\n");
+
+                result
             },
         }
     }
@@ -378,7 +428,6 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
     }
 
     result += "
-    mov rbp, rdi ; restore rbp from the value saved in rdi, again this is onyl usefull if the entire program is being invoked as a function or something idk... felt nice to include
     mov rdi, rax ; exit code is stored in rdi
     mov rax, 60 ; linux system call for exit
     syscall ; invoke operating system to exit
@@ -497,7 +546,10 @@ fn main() {
 
     text.data = "
 {
-    func: ;; { ;; {3 + 5}}
+    a: 60
+    dostuff: ;; a + 9
+    a: 50
+    dostuff()
 }
     "
     .to_owned();
@@ -506,6 +558,7 @@ fn main() {
     let mut ast = parse(lexer).expect("Empty ast");
     println!("AST:\n{ast:?}\n");
     let mut symbol_stack: VecDeque<(VecDeque<SymbolTableEntry>, i32)> = VecDeque::new();
+    symbol_stack.push_front((VecDeque::new(), 0)); //global scope
     let mut asm = compile_to_asm(ast, &mut symbol_stack);
     println!("ASM:\n{asm}\n");
 }
