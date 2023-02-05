@@ -243,8 +243,21 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
         global    _start
 
         section   .text
-    _start:\n"
-        .to_owned();
+        _start:
+        push rbp
+        mov rbp, rsp
+        
+        lea rax, [__builtin__print] ; for print, todo, something better pepela
+        push rax
+        "
+    .to_owned();
+
+    // put print in the scope
+    let scope = symbol_map.iter_mut().next().expect("No current scope");
+    scope.1 += 1;
+    let print = SymbolTableEntry { symbol: "print".to_owned(), position: scope.1 * -8 };
+    scope.0.push_front(print);
+    // end builtin print stuff
 
     unsafe fn compile_to_asm_rec_helper(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEntry>, i32)>) -> String {
         match entry {
@@ -295,13 +308,17 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                 let mut result = ";MultiExpr\n".to_owned();
                 symbol_map.push_front((VecDeque::new(), 0)); //new scope
 
-                result += "mov rdi, rbp\n";
+                // result += "mov rdi, rbp\n";
+                result += "push rbp\n";
                 result += "mov rbp, rsp\n";
 
                 for expr in exprs {
                     result += &compile_to_asm_rec_helper(expr, symbol_map);
                 }
-                result += "mov rbp, rdi\n";
+                // result += "mov rbp, rdi\n";
+
+                result += "mov rsp, rbp\n";
+                result += "pop rbp\n";
 
                 symbol_map.pop_front();
                 result
@@ -311,10 +328,22 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
 
                 // only curr scope for now
                 let mut result = "; Symbol eval \n".to_owned();
-                let map = symbol_map.iter().next().expect("No current scope");
-                let offset = map.0.iter().find(|x| x.symbol.eq(&symbol)).expect(&format!("no symbol: {symbol} found in current scope")).position;
+                let mut offset_option = None;
+                // let map = symbol_map.iter().next().expect("No current scope");
+                result += "mov rax, rbp\n";
 
-                result += &format!("mov rax, [rbp{offset:+}]\n");
+                for map in symbol_map.iter() {
+                    if let Some(entry) = map.0.iter().find(|x| x.symbol.eq(&symbol)) {
+                        offset_option = Some(entry.position);
+                        break;
+                    }
+                    result += "mov rax, [rax]\n"; //only happens AFTER the potential break, so basically applies to next iteration, if there is no next iteration this isn't a problem since were gonna panic when unpacking the offset in the next line
+                }
+                let offset = offset_option.expect(&format!("Could not evaluate variable: {symbol}"));
+
+                result += &format!("mov rax, [rax {offset:+}]\n");
+
+                // result += &format!("mov rax, [rbp{offset:+}]\n");
 
                 // loads the variable at offset 8 in the CURRENT scope
                 // mov rax [rbp-8]
@@ -354,16 +383,30 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                 result
             },
             // TODO: later: figure out larger return values, see: https://stackoverflow.com/questions/24741218/how-c-compiler-treats-a-struct-return-value-from-a-function-in-asm
-            Expr::Func(expr, symbol) => {
+            Expr::Func(expr, param_symbols) => {
                 let mut result = "; func\n".to_owned();
                 function_counter = function_counter + 1;
                 result += &format!("jmp end_{function_counter}\n");
 
                 // TODO: label?
                 result += &format!("begin_{function_counter}:\n");
+                result += "push rbp\n";
+                result += "mov rbp, rsp\n";
 
                 // TODO: do some shit with the symbol table for fucntion params, should be at some positive offset to rbp after we move it
                 // TODO: make the function code:
+
+                let mut map: VecDeque<(VecDeque<SymbolTableEntry>, i32)> = VecDeque::new();
+                let mut scope = (VecDeque::new(), 1); //start at 1 to account for the return address
+
+                // TODO: Add params at positive offset in new scope
+                for symbol in param_symbols.into_iter().rev() {
+                    // TODO: store pointer location in some sort of table by symbol
+                    scope.1 += 1;
+                    let entry = SymbolTableEntry { symbol: symbol, position: scope.1 * 8 }; //positive 8 because params are placed before the bsp
+                    scope.0.push_front(entry);
+                }
+                map.push_front(scope); //function scope
 
                 // TODO:    save rbp (stack base pointer) (push rbp)
                 // TODO:    (mov rbp, rsp)
@@ -372,7 +415,7 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                 // TODO:    maybe backup non-volatile registers on the stack? or be smart about it somehow...
 
                 // TODO:    evaluate the expr (stores value in rax)
-                result += &compile_to_asm_rec_helper(*expr, symbol_map);
+                result += &compile_to_asm_rec_helper(*expr, &mut map); //use the map for the function specifically
 
                 // TODO:    if touched non-volatile registers, restore them
 
@@ -381,12 +424,13 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                 // result += "mov rsp, rbp\npop rbp\n";
 
                 // TODO:    (ret)? idk, maybe just (jmp [rsp])?
+                result += "mov rsp, rbp\n";
+                result += "pop rbp\n";
                 result += "ret\n";
 
                 result += &format!("end_{function_counter}:\n");
                 // TODO: somehow move the pointer to this function code into rax... again, label?
                 result += &format!("lea rax, [begin_{function_counter}]\n");
-                function_counter = function_counter - 1;
                 result
                 // TODO: later: figure out closures / enclosed variables
             },
@@ -394,6 +438,7 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                 let mut result = "; func call \n".to_owned();
                 // TODO: move parameters on stack (or registers)
                 let mut param_count = 0;
+
                 for expr in exprs {
                     //Reverse order I think but eh
                     result += &compile_to_asm_rec_helper(expr, symbol_map);
@@ -401,15 +446,26 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                     param_count += 8;
                 }
 
-                // TODO: move ret addres on stack
-                // TODO: jump to function
-                // TODO: <- ret addr here:
+                // move ret addres on stack
+                // jump to function
+                // <- ret addr here:
 
                 //Stolen from the symbol eval TODO: consolidate
-                let map = symbol_map.iter().next().expect("No current scope");
-                let offset = map.0.iter().find(|x| x.symbol.eq(&symbol)).expect(&format!("no symbol: {symbol} found in current scope")).position;
+                result += "; Function call symbol eval \n";
+                let mut offset_option = None;
+                // let map = symbol_map.iter().next().expect("No current scope");
+                result += "mov rax, rbp\n";
 
-                result += &format!("mov rax, [rbp{offset:+}]\n");
+                for map in symbol_map.iter() {
+                    if let Some(entry) = map.0.iter().find(|x| x.symbol.eq(&symbol)) {
+                        offset_option = Some(entry.position);
+                        break;
+                    }
+                    result += "mov rax, [rax]\n"; //only happens AFTER the potential break, so basically applies to next iteration, if there is no next iteration this isn't a problem since were gonna panic when unpacking the offset in the next line
+                }
+                let offset = offset_option.expect(&format!("Could not evaluate variable: {symbol}"));
+
+                result += &format!("mov rax, [rax {offset:+}]\n");
                 //end stolen
                 result += "call rax\n";
 
@@ -428,9 +484,34 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
     }
 
     result += "
+    mov rsp, rbp
+    pop rbp
     mov rdi, rax ; exit code is stored in rdi
     mov rax, 60 ; linux system call for exit
     syscall ; invoke operating system to exit
+    ";
+
+    // print function
+    result += "
+    __builtin__print:
+    push rbp
+    mov rbp, rsp
+
+    push rdi
+
+    lea rax, [rbp+16]
+
+    mov       rdi, 1                  ; file handle 1 is stdout
+    mov       rsi, rax                ; address of string to output
+    mov       rdx, 1                  ; number of bytes
+    mov       rax, 1                  ; system call for write
+    syscall                           ; invoke operating system to do the write
+
+    pop rdi
+
+    mov rsp, rbp
+    pop rbp
+    ret
     ";
     result
 }
@@ -487,6 +568,7 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
 //     }
 // }
 
+#[derive(Debug)]
 struct SymbolTableEntry {
     symbol: String,
     position: i32,
@@ -502,9 +584,9 @@ fn main() {
                   
                   _:;x;{x} # identity function since we can't use parenthesis in expressions #
                   
-                  printDigit: ;num; print(48+num)
+                  printDigit: ;print num; print(48+num)
                   
-                  newline: ;; print(10)
+                  newline: ;print; print(10)
                   
                   if: ;bool action; { res:0 bool & res:action() res } # if \"statement\" using short circuit evaluation. Returns 0 if it didn't run, otherwise return the result of the action #
                   ifElse: ;bool ifAction elseAction; { res:elseAction bool & { res:ifAction 1 } res() } 
@@ -524,11 +606,11 @@ fn main() {
                   
                   pow: ;base exponent; loopWithBase(;i; {i < exponent + 1} ;i res; {res * base} 1)/base
                   
-                  printNum: ;x; { # xd no shot I figure out how to do this with the loop func, garbage lang #
+                  printNum: ;print x; { # xd no shot I figure out how to do this with the loop func, garbage lang #
                       
                       recusiveHelper: ;i prev; {
                           if(_(prev/10) > 0 ;;recusiveHelper(i + 1 prev/10))
-                          printDigit(prev - _( _(prev/10) * 10))                                           
+                          printDigit(print prev - _( _(prev/10) * 10))                                           
                       }
                       
                       if(x > 0 ;;recusiveHelper(0 x))
@@ -537,21 +619,24 @@ fn main() {
                   # stdlib end #
                   
                   newline()
-                  printNum(pow(3 10))
+                  printNum(print pow(3 10))
                   newline()
               }
               "
         .to_owned(),
     };
 
-    text.data = "
-{
-    a: 60
-    dostuff: ;; a + 9
-    a: 50
-    dostuff()
-}
-    "
+    text.data = "{
+        apply_twice: ;f x; {
+            y: f(x)
+            f(y)
+        }
+
+        add_two: ;x; x+2
+
+        apply_twice(add_two 65)
+
+     }"
     .to_owned();
 
     let mut lexer = TokenProvider::new(&mut text);
