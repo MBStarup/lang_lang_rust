@@ -100,7 +100,16 @@ where
             Option::Some(c) if c == ';' => Some(Token::SemiColon), //* Function declaration
             Option::Some(c) if c == '(' => Some(Token::ParensStart),
             Option::Some(c) if c == ')' => Some(Token::ParensEnd),
-            Option::Some(c) if "+-*/&|=<>".contains(c) => Some(Token::Operator(c.to_string())),
+            //Operators
+            Option::Some(c) if c == '+' => Some(Token::Operator(Operator::Add)),
+            Option::Some(c) if c == '-' => Some(Token::Operator(Operator::Subtract)),
+            Option::Some(c) if c == '*' => Some(Token::Operator(Operator::Multiply)),
+            Option::Some(c) if c == '/' => Some(Token::Operator(Operator::Divide)),
+            Option::Some(c) if c == '&' => Some(Token::Operator(Operator::And)),
+            Option::Some(c) if c == '|' => Some(Token::Operator(Operator::Or)),
+            Option::Some(c) if c == '=' => Some(Token::Operator(Operator::Equals)),
+            Option::Some(c) if c == '<' => Some(Token::Operator(Operator::LessThan)),
+            Option::Some(c) if c == '>' => Some(Token::Operator(Operator::GreaterThan)),
             Option::None => Option::None,
 
             Option::Some(c) => panic!("Error parsing: {}", c),
@@ -109,7 +118,7 @@ where
 }
 #[derive(Debug, Clone)]
 enum Token {
-    Operator(String), // TODO: make an Operator enum instead of using strings lule
+    Operator(Operator), // TODO: make an Operator enum instead of using strings lule
     ParensStart,
     ParensEnd,
     Number(i32),
@@ -123,6 +132,19 @@ enum Token {
     WhiteSpace,
     Comment,
     */
+}
+
+#[derive(Debug, Clone)]
+enum Operator {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    And,
+    Or,
+    Equals,
+    LessThan,
+    GreaterThan,
 }
 
 fn parse<'a, T: Iterator<Item = Token>>(tokens: T) -> Option<Expr> {
@@ -226,7 +248,7 @@ enum Expr {
     MultiExpr(Vec<Expr>),
     Int(i32),
     Eval(String), // TODO: think about simmilarities between this and function (and int?)
-    BiExpr(Box<Expr>, Box<Expr>, String),
+    BiExpr(Box<Expr>, Box<Expr>, Operator),
     Func(Box<Expr>, Vec<String>),
     Assign(Box<Expr>, String),
     Call(Vec<Expr>, String),
@@ -290,7 +312,7 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
             },
             Expr::BiExpr(expr_1, expr_2, operator) => match operator {
                 // TODO: again, please just make the operators enums, this is pain
-                o if "+".contains(o.chars().next().unwrap()) => {
+                Operator::Add => {
                     let mut result = ";Addition\n".to_owned();
                     result += "push rdi\n"; //cache rdi on stack
                     result += &compile_to_asm_rec_helper(*expr_2, symbol_map);
@@ -300,7 +322,7 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                     result += "pop rdi\n"; //restore rdi
                     result
                 },
-                o if "*".contains(o.chars().next().unwrap()) => {
+                Operator::Multiply => {
                     let mut result = ";Multiplication\n".to_owned();
                     result += "push rdi\n"; //cache rdi on stack
                     result += &compile_to_asm_rec_helper(*expr_2, symbol_map);
@@ -310,7 +332,7 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                     result += "pop rdi\n"; //restore rdi
                     result
                 },
-                o if "-".contains(o.chars().next().unwrap()) => {
+                Operator::Subtract => {
                     let mut result = ";Subtraction\n".to_owned();
                     result += "push rdi\n"; //cache rdi on stack
                     result += &compile_to_asm_rec_helper(*expr_2, symbol_map);
@@ -320,7 +342,7 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                     result += "pop rdi\n"; //restore rdi
                     result
                 },
-                o if "/".contains(o.chars().next().unwrap()) => {
+                Operator::Divide => {
                     let mut result = ";Division\n".to_owned();
                     result += "push rdi\n"; //cache rdi on stack
                     result += &compile_to_asm_rec_helper(*expr_2, symbol_map);
@@ -330,7 +352,7 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                     result += "pop rdi\n"; //restore rdi
                     result
                 },
-                o => todo!("operator: {o}"),
+                o => todo!("{o:?}"),
             },
             Expr::MultiExpr(exprs) => {
                 let mut result = ";MultiExpr\n".to_owned();
