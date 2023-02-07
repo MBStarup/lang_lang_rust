@@ -291,14 +291,42 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
             Expr::BiExpr(expr_1, expr_2, operator) => match operator {
                 // TODO: again, please just make the operators enums, this is pain
                 o if "+".contains(o.chars().next().unwrap()) => {
-                    //* Sets RAX to the result, alters RBX, MAYBE BAD!
-
                     let mut result = ";Addition\n".to_owned();
                     result += "push rdi\n"; //cache rdi on stack
-                    result += &compile_to_asm_rec_helper(*expr_1, symbol_map);
-                    result += "mov rdi, rax\n"; //move rdi (result of expr_1) into rax
                     result += &compile_to_asm_rec_helper(*expr_2, symbol_map);
+                    result += "mov rdi, rax\n"; //move rdi (result of expr_1) into rax
+                    result += &compile_to_asm_rec_helper(*expr_1, symbol_map);
                     result += "add rax, rdi\n"; //add them and store in rax
+                    result += "pop rdi\n"; //restore rdi
+                    result
+                },
+                o if "*".contains(o.chars().next().unwrap()) => {
+                    let mut result = ";Multiplication\n".to_owned();
+                    result += "push rdi\n"; //cache rdi on stack
+                    result += &compile_to_asm_rec_helper(*expr_2, symbol_map);
+                    result += "mov rdi, rax\n"; //move rdi (result of expr_1) into rax
+                    result += &compile_to_asm_rec_helper(*expr_1, symbol_map);
+                    result += "mul rdi\n"; //multiply them and store in rax (rax as des is implicit for mul )
+                    result += "pop rdi\n"; //restore rdi
+                    result
+                },
+                o if "-".contains(o.chars().next().unwrap()) => {
+                    let mut result = ";Subtraction\n".to_owned();
+                    result += "push rdi\n"; //cache rdi on stack
+                    result += &compile_to_asm_rec_helper(*expr_2, symbol_map);
+                    result += "mov rdi, rax\n"; //move rdi (result of expr_1) into rax
+                    result += &compile_to_asm_rec_helper(*expr_1, symbol_map);
+                    result += "sub rax, rdi\n"; //subtract them and store in rax
+                    result += "pop rdi\n"; //restore rdi
+                    result
+                },
+                o if "/".contains(o.chars().next().unwrap()) => {
+                    let mut result = ";Division\n".to_owned();
+                    result += "push rdi\n"; //cache rdi on stack
+                    result += &compile_to_asm_rec_helper(*expr_2, symbol_map);
+                    result += "mov rdi, rax\n"; //move rdi (result of expr_1) into rax
+                    result += &compile_to_asm_rec_helper(*expr_1, symbol_map);
+                    result += "div rdi\n"; //divide them and store in rax (implied)
                     result += "pop rdi\n"; //restore rdi
                     result
                 },
@@ -627,15 +655,9 @@ fn main() {
     };
 
     text.data = "{
-        apply_twice: ;f x; {
-            y: f(x)
-            f(y)
-        }
+        _:;x;{x} # identity function since we can't use parenthesis in expressions #
 
-        add_two: ;x; x+2
-
-        apply_twice(add_two 65)
-
+        _(_(_(70+3)*2)/4)
      }"
     .to_owned();
 
