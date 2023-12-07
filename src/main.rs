@@ -118,7 +118,7 @@ where
 }
 #[derive(Debug, Clone)]
 enum Token {
-    Operator(Operator), // TODO: make an Operator enum instead of using strings lule
+    Operator(Operator),
     ParensStart,
     ParensEnd,
     Number(i32),
@@ -197,12 +197,12 @@ fn parse<'a, T: Iterator<Item = Token>>(tokens: T) -> Option<Expr> {
                         Some(Token::Operator(operator)) => {
                             tokens.next();
                             Some(Expr::BiExpr(
-                                Box::new(Expr::Call(params, symbol)),
+                                Box::new(Expr::Call(Box::new(Expr::Eval(symbol)), params)),
                                 Box::new(parse_rec(tokens).unwrap_or_else(|| panic!("Missing right side of BiExpr {operator:?}"))),
                                 operator,
                             ))
                         },
-                        _ => Some(Expr::Call(params, symbol)),
+                        _ => Some(Expr::Call(Box::new(Expr::Eval(symbol)), params)),
                     }
                 },
                 Some(_) => Some(Expr::Eval(symbol)),
@@ -251,7 +251,7 @@ enum Expr {
     BiExpr(Box<Expr>, Box<Expr>, Operator),
     Func(Box<Expr>, Vec<String>),
     Assign(Box<Expr>, String),
-    Call(Vec<Expr>, String),
+    Call(Box<Expr>, Vec<Expr>),
 }
 
 fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEntry>, i32)>) -> String {
@@ -460,7 +460,7 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
 
                 // TODO:    save rbp (stack base pointer) (push rbp)
                 // TODO:    (mov rbp, rsp)
-                // result += "push rbp\nmov rbp, rsp\n";
+                // ! result += "push rbp\nmov rbp, rsp\n";
 
                 // TODO:    maybe backup non-volatile registers on the stack? or be smart about it somehow...
 
@@ -677,9 +677,12 @@ fn main() {
     };
 
     text.data = "{
-        _:;x;{x} # identity function since we can't use parenthesis in expressions #
+        _:;x;x # identity function since we can't use parenthesis in expressions #
 
-        _(_(_(70+3)*2)/4)
+        f_p:;;;;10
+
+        f_p()() 
+
      }"
     .to_owned();
 
