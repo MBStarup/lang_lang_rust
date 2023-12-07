@@ -1,5 +1,5 @@
 use core::panic;
-use std::{collections::VecDeque, iter::Peekable};
+use std::{collections::VecDeque, fmt::Debug, iter::Peekable};
 
 struct CharProvider {
     position: usize,
@@ -116,6 +116,39 @@ where
         }
     }
 }
+
+struct LoggingIter<T, I>
+where
+    T: Iterator<Item = I>,
+    I: Debug,
+{
+    internal_iter: T,
+}
+
+impl<T, I> LoggingIter<T, I>
+where
+    T: Iterator<Item = I>,
+    I: Debug,
+{
+    fn new(iter: T) -> LoggingIter<T, I> {
+        LoggingIter { internal_iter: iter }
+    }
+}
+
+impl<T, I> Iterator for LoggingIter<T, I>
+where
+    T: Iterator<Item = I>,
+    I: Debug,
+{
+    type Item = I;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let x = self.internal_iter.next();
+        println!("{x:?}");
+        x
+    }
+}
+
 #[derive(Debug, Clone)]
 enum Token {
     Operator(Operator),
@@ -484,39 +517,44 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                 result
                 // TODO: later: figure out closures / enclosed variables
             },
-            Expr::Call(exprs, symbol) => {
+            Expr::Call(func, params) => {
                 let mut result = "; func call \n".to_owned();
                 // TODO: move parameters on stack (or registers)
                 let mut param_count = 0;
 
-                for expr in exprs {
+                for param in params {
                     //Reverse order I think but eh
-                    result += &compile_to_asm_rec_helper(expr, symbol_map);
+                    result += &compile_to_asm_rec_helper(param, symbol_map);
                     result += "push rax\n";
                     param_count += 8;
                 }
+
+                // TODO: add params to new scope under name?
 
                 // move ret addres on stack
                 // jump to function
                 // <- ret addr here:
 
                 //Stolen from the symbol eval TODO: consolidate
-                result += "; Function call symbol eval \n";
-                let mut offset_option = None;
-                // let map = symbol_map.iter().next().expect("No current scope");
-                result += "mov rax, rbp\n";
+                // result += "; Function call symbol eval \n";
+                // let mut offset_option = None;
+                // // let map = symbol_map.iter().next().expect("No current scope");
+                // result += "mov rax, rbp\n";
 
-                for map in symbol_map.iter() {
-                    if let Some(entry) = map.0.iter().find(|x| x.symbol.eq(&symbol)) {
-                        offset_option = Some(entry.position);
-                        break;
-                    }
-                    result += "mov rax, [rax]\n"; //only happens AFTER the potential break, so basically applies to next iteration, if there is no next iteration this isn't a problem since were gonna panic when unpacking the offset in the next line
-                }
-                let offset = offset_option.expect(&format!("Could not evaluate variable: {symbol}"));
+                // for map in symbol_map.iter() {
+                // if let Some(entry) = map.0.iter().find(|x| x.symbol.eq(&symbol)) {
+                // offset_option = Some(entry.position);
+                // break;
+                // }
+                // result += "mov rax, [rax]\n"; //only happens AFTER the potential break, so basically applies to next iteration, if there is no next iteration this isn't a problem since were gonna panic when unpacking the offset in the next line
+                // }
+                // let offset = offset_option.expect(&format!("Could not evaluate variable: {symbol}"));
 
-                result += &format!("mov rax, [rax {offset:+}]\n");
+                // result += &format!("mov rax, [rax {offset:+}]\n");
                 //end stolen
+
+                result += "; Function eval \n";
+                result += &compile_to_asm_rec_helper(*func, symbol_map);
                 result += "call rax\n";
 
                 // TODO: clean params off stack
@@ -677,16 +715,12 @@ fn main() {
     };
 
     text.data = "{
-        _:;x;x # identity function since we can't use parenthesis in expressions #
-
         f_p:;;;;10
-
         f_p()() 
-
      }"
     .to_owned();
 
-    let mut lexer = TokenProvider::new(&mut text);
+    let mut lexer = LoggingIter::new(TokenProvider::new(&mut text));
     let mut ast = parse(lexer).expect("Empty ast");
     println!("AST:\n{ast:?}\n");
     let mut symbol_stack: VecDeque<(VecDeque<SymbolTableEntry>, i32)> = VecDeque::new();
