@@ -1,5 +1,5 @@
 use core::panic;
-use std::{collections::VecDeque, fmt::Debug, iter::Peekable};
+use std::{collections::VecDeque, env::args, fmt::Debug, iter::Peekable};
 
 struct CharProvider {
     position: usize,
@@ -123,6 +123,7 @@ where
     I: Debug,
 {
     internal_iter: T,
+    logging: bool,
 }
 
 impl<T, I> LoggingIter<T, I>
@@ -130,8 +131,8 @@ where
     T: Iterator<Item = I>,
     I: Debug,
 {
-    fn new(iter: T) -> LoggingIter<T, I> {
-        LoggingIter { internal_iter: iter }
+    fn new(iter: T, log: bool) -> LoggingIter<T, I> {
+        LoggingIter { internal_iter: iter, logging: log }
     }
 }
 
@@ -144,7 +145,9 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         let x = self.internal_iter.next();
-        println!("{x:?}");
+        if self.logging {
+            println!("{x:?}");
+        }
         x
     }
 }
@@ -204,55 +207,11 @@ fn parse<'a, T: Iterator<Item = Token>>(tokens: T) -> Option<Expr> {
                     tokens.next();
                     Some(Expr::Assign(Box::new(parse_rec(tokens).unwrap_or_else(|| panic!("Cannot assign empty value to {symbol:?}"))), symbol))
                 },
-                Some(Token::Operator(operator)) => {
-                    tokens.next();
-                    Some(Expr::BiExpr(
-                        Box::new(Expr::Eval(symbol)),
-                        Box::new(parse_rec(tokens).unwrap_or_else(|| panic!("Missing right side of BiExpr {operator:?}"))),
-                        operator,
-                    ))
-                },
-                Some(Token::ParensStart) => {
-                    let mut params: Vec<Expr> = Vec::new();
-                    tokens.next();
-
-                    while match tokens.peek() {
-                        Some(Token::ParensEnd) => false,
-                        Some(_) => true,
-                        None => panic!("Unclosed function call"),
-                    } {
-                        params.push(parse_rec(tokens).unwrap())
-                    }
-
-                    tokens.next(); // Remove ParensEnd
-
-                    match tokens.peek().cloned() {
-                        Some(Token::Operator(operator)) => {
-                            tokens.next();
-                            Some(Expr::BiExpr(
-                                Box::new(Expr::Call(Box::new(Expr::Eval(symbol)), params)),
-                                Box::new(parse_rec(tokens).unwrap_or_else(|| panic!("Missing right side of BiExpr {operator:?}"))),
-                                operator,
-                            ))
-                        },
-                        _ => Some(Expr::Call(Box::new(Expr::Eval(symbol)), params)),
-                    }
-                },
-                Some(_) => Some(Expr::Eval(symbol)),
+                Some(_) => parse_rec_after_expr(tokens, Expr::Eval(symbol)),
                 None => None,
             },
             //Cringe clone occurs
-            Some(Token::Number(number)) => match tokens.peek().cloned() {
-                Some(Token::Operator(operator)) => {
-                    tokens.next();
-                    Some(Expr::BiExpr(
-                        Box::new(Expr::Int(number)),
-                        Box::new(parse_rec(tokens).unwrap_or_else(|| panic!("Missing right side of BiExpr {operator:?}"))),
-                        operator,
-                    ))
-                },
-                _ => Some(Expr::Int(number)),
-            },
+            Some(Token::Number(number)) => parse_rec_after_expr(tokens, Expr::Int(number)),
             Some(Token::SemiColon) => {
                 let mut params: Vec<String> = Vec::new();
 
@@ -265,11 +224,41 @@ fn parse<'a, T: Iterator<Item = Token>>(tokens: T) -> Option<Expr> {
                     Some(token) => panic!("Unknown token ({token:?}) in function params"),
                     None => panic!("Unclosed function declaration"),
                 } {}
-
-                Some(Expr::Func(Box::new(parse_rec(tokens).expect("Function body missing")), params))
+                let function_expression = Expr::Func(Box::new(parse_rec(tokens).expect("Function body missing")), params);
+                parse_rec_after_expr(tokens, function_expression)
             },
             None => None,
             Some(token) => panic!("Bad token: {token:?}"),
+        }
+    }
+
+    fn parse_rec_after_expr<T: Iterator<Item = Token>>(tokens: &mut Peekable<T>, last_expr: Expr) -> Option<Expr> {
+        match tokens.peek().clone() {
+            Some(Token::Operator(_)) => {
+                if let Some(Token::Operator(operator)) = tokens.next() {
+                    Some(Expr::BiExpr(Box::new(last_expr), Box::new(parse_rec(tokens).unwrap_or_else(|| panic!("Missing right side of BiExpr {operator:?}"))), operator))
+                } else {
+                    todo!("unreachable")
+                }
+            },
+            Some(Token::ParensStart) => {
+                let mut params: Vec<Expr> = Vec::new();
+                tokens.next();
+
+                while match tokens.peek() {
+                    Some(Token::ParensEnd) => false,
+                    Some(_) => true,
+                    None => panic!("Unclosed function call"),
+                } {
+                    params.push(parse_rec(tokens).unwrap())
+                }
+
+                tokens.next(); // Remove ParensEnd
+
+                parse_rec_after_expr(tokens, Expr::Call(Box::new(last_expr), params))
+            },
+            Some(_) => Some(last_expr),
+            None => Some(last_expr),
         }
     }
 
@@ -290,7 +279,7 @@ enum Expr {
 fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEntry>, i32)>) -> String {
     // TODO: better way to build strings pepela
 
-    static mut function_counter: u64 = 0; // TODO: be better
+    static mut FUNCTION_COUNTER: u64 = 0; // TODO: be better
 
     let mut result = "
     ;compiled with rust lang lang compiler
@@ -468,11 +457,13 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
             // TODO: later: figure out larger return values, see: https://stackoverflow.com/questions/24741218/how-c-compiler-treats-a-struct-return-value-from-a-function-in-asm
             Expr::Func(expr, param_symbols) => {
                 let mut result = "; func\n".to_owned();
-                function_counter = function_counter + 1;
-                result += &format!("jmp end_{function_counter}\n");
+                FUNCTION_COUNTER = FUNCTION_COUNTER + 1;
+                let end_tag = &format!("end_{FUNCTION_COUNTER}");
+                let start_tag = &format!("begin_{FUNCTION_COUNTER}");
+                result += &format!("jmp {end_tag}\n");
 
                 // TODO: label?
-                result += &format!("begin_{function_counter}:\n");
+                result += &format!("{start_tag}:\n");
                 result += "push rbp\n";
                 result += "mov rbp, rsp\n";
 
@@ -511,9 +502,9 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                 result += "pop rbp\n";
                 result += "ret\n";
 
-                result += &format!("end_{function_counter}:\n");
+                result += &format!("{end_tag}:\n");
                 // TODO: somehow move the pointer to this function code into rax... again, label?
-                result += &format!("lea rax, [begin_{function_counter}]\n");
+                result += &format!("lea rax, [{start_tag}]\n");
                 result
                 // TODO: later: figure out closures / enclosed variables
             },
@@ -714,17 +705,20 @@ fn main() {
         .to_owned(),
     };
 
-    text.data = "{
-        f_p:;;;;10
-        f_p()() 
-     }"
-    .to_owned();
+    // text.data = "{
+    //     f_p:;;;;10
+    //     f_p()()
+    //  }"
+    // .to_owned();
 
-    let mut lexer = LoggingIter::new(TokenProvider::new(&mut text));
+    let mut args = args();
+    let debug = args.any(|arg| arg.eq("-d"));
+
+    let mut lexer = LoggingIter::new(TokenProvider::new(&mut text), debug);
     let mut ast = parse(lexer).expect("Empty ast");
-    println!("AST:\n{ast:?}\n");
+    // println!("AST:\n{ast:?}\n");
     let mut symbol_stack: VecDeque<(VecDeque<SymbolTableEntry>, i32)> = VecDeque::new();
     symbol_stack.push_front((VecDeque::new(), 0)); //global scope
     let mut asm = compile_to_asm(ast, &mut symbol_stack);
-    println!("ASM:\n{asm}\n");
+    println!("{asm}")
 }
