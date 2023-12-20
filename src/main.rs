@@ -307,7 +307,8 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
         match entry {
             Expr::Assign(expr, symbol) => {
                 // TODO: evaluate expr
-                let mut result = compile_to_asm_rec_helper(*expr, symbol_map);
+                let mut result = ";Assign\n".to_owned();
+                result += &compile_to_asm_rec_helper(*expr, symbol_map);
 
                 let scope = symbol_map.iter_mut().next().expect("No current scope");
                 // Check that it's a new assignment
@@ -338,7 +339,7 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                     let mut result = ";Addition\n".to_owned();
                     result += "push rdi\n"; //cache rdi on stack
                     result += &compile_to_asm_rec_helper(*expr_2, symbol_map);
-                    result += "mov rdi, rax\n"; //move rdi (result of expr_1) into rax
+                    result += "mov rdi, rax\n"; //move rax (result of expr_1) into rdi
                     result += &compile_to_asm_rec_helper(*expr_1, symbol_map);
                     result += "add rax, rdi\n"; //add them and store in rax
                     result += "pop rdi\n"; //restore rdi
@@ -348,7 +349,7 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                     let mut result = ";Multiplication\n".to_owned();
                     result += "push rdi\n"; //cache rdi on stack
                     result += &compile_to_asm_rec_helper(*expr_2, symbol_map);
-                    result += "mov rdi, rax\n"; //move rdi (result of expr_1) into rax
+                    result += "mov rdi, rax\n"; //move rax (result of expr_1) into rdi
                     result += &compile_to_asm_rec_helper(*expr_1, symbol_map);
                     result += "mul rdi\n"; //multiply them and store in rax (rax as des is implicit for mul )
                     result += "pop rdi\n"; //restore rdi
@@ -358,7 +359,7 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                     let mut result = ";Subtraction\n".to_owned();
                     result += "push rdi\n"; //cache rdi on stack
                     result += &compile_to_asm_rec_helper(*expr_2, symbol_map);
-                    result += "mov rdi, rax\n"; //move rdi (result of expr_1) into rax
+                    result += "mov rdi, rax\n"; //move rax (result of expr_1) into rdi
                     result += &compile_to_asm_rec_helper(*expr_1, symbol_map);
                     result += "sub rax, rdi\n"; //subtract them and store in rax
                     result += "pop rdi\n"; //restore rdi
@@ -368,9 +369,30 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                     let mut result = ";Division\n".to_owned();
                     result += "push rdi\n"; //cache rdi on stack
                     result += &compile_to_asm_rec_helper(*expr_2, symbol_map);
-                    result += "mov rdi, rax\n"; //move rdi (result of expr_1) into rax
+                    result += "mov rdi, rax\n"; //move rax (result of expr_1) into rdi
                     result += &compile_to_asm_rec_helper(*expr_1, symbol_map);
                     result += "div rdi\n"; //divide them and store in rax (implied)
+                    result += "pop rdi\n"; //restore rdi
+                    result
+                },
+                Operator::And => {
+                    FUNCTION_COUNTER = FUNCTION_COUNTER + 1;
+                    let end_label = format!("and_end_{FUNCTION_COUNTER}");
+                    let false_label = format!("and_false_{FUNCTION_COUNTER}");
+                    let mut result = ";And\n".to_owned();
+                    result += "push rdi\n"; //cache rdi on stack
+                    result += &compile_to_asm_rec_helper(*expr_1, symbol_map);
+                    result += "cmp rax, 0\n"; //check if zero
+                    result += &format!("je {false_label}\n"); //jump if 0 (shortcircuit)
+                    result += "mov rdi, rax\n"; //move rax (result of expr_1) into rdi
+                    result += &compile_to_asm_rec_helper(*expr_2, symbol_map);
+                    result += "cmp rax, 0\n"; //check if zero
+                    result += &format!("je {false_label}\n"); //jump if 0 (shortcircuit)
+                    result += "mov rax, 1\n"; //true case
+                    result += &format!("jmp {end_label}\n").to_owned(); //jump to skip false case
+                    result += &format!("{false_label}:\n"); //label
+                                                            // result += "mov rax, 0"; //false case // redundant, case is only reached if rax == 0
+                    result += &format!("{end_label}:\n"); //label
                     result += "pop rdi\n"; //restore rdi
                     result
                 },
@@ -405,7 +427,10 @@ fn compile_to_asm(entry: Expr, symbol_map: &mut VecDeque<(VecDeque<SymbolTableEn
                 result += "mov rax, rbp\n";
 
                 for map in symbol_map.iter() {
+                    eprintln!("Lookig for {symbol} in ");
+                    eprintln!("{map:?}");
                     if let Some(entry) = map.0.iter().find(|x| x.symbol.eq(&symbol)) {
+                        eprintln!("Found {symbol}");
                         offset_option = Some(entry.position);
                         break;
                     }
@@ -663,53 +688,59 @@ fn main() {
                   
                   _:;x;{x} # identity function since we can't use parenthesis in expressions #
                   
-                  printDigit: ;print num; print(48+num)
+                  printDigit: ;num; print(48+num)
+              
+                  newline: ;; print(10)
                   
-                  newline: ;print; print(10)
-                  
-                  if: ;bool action; { res:0 bool & res:action() res } # if \"statement\" using short circuit evaluation. Returns 0 if it didn't run, otherwise return the result of the action #
+                  if: ;bool action; { res:0 bool & res:action() res } # if statement using short circuit evaluation. Returns 0 if it didn't run, otherwise return the result of the action #
                   ifElse: ;bool ifAction elseAction; { res:elseAction bool & { res:ifAction 1 } res() } 
                   
                   !: ;bool; bool = 0
-                  
+              
                   loopWithBase: ;predicate action base; { # Takes a predicate acting on the loop count, and an action acting on the loop count to perform while the predicate evaluates true #
-                      
+                  
                       recusiveHelper: ;count prev; {
-                          
+                      
                           ifElse(predicate(count + 1) ;;recusiveHelper(count + 1 action(count prev)) ;;action(count prev))
-                          
+                                                                                    
                       }
                       
                       ifElse(predicate(0) ;;recusiveHelper(0 base) ;;base )
                   }
-                  
+              
                   pow: ;base exponent; loopWithBase(;i; {i < exponent + 1} ;i res; {res * base} 1)/base
-                  
-                  printNum: ;print x; { # xd no shot I figure out how to do this with the loop func, garbage lang #
+              
+                  printNum: ;x; { # xd no shot I figure out how to do this with the loop func, garbage lang #
                       
                       recusiveHelper: ;i prev; {
                           if(_(prev/10) > 0 ;;recusiveHelper(i + 1 prev/10))
-                          printDigit(print prev - _( _(prev/10) * 10))                                           
+                          printDigit(prev - _( _(prev/10) * 10))                                           
                       }
                       
                       if(x > 0 ;;recusiveHelper(0 x))
                   }
               
                   # stdlib end #
-                  
+              
                   newline()
-                  printNum(print pow(3 10))
+                  printNum(pow(3 10))
                   newline()
               }
               "
         .to_owned(),
     };
 
-    // text.data = "{
-    //     f_p:;;;;10
-    //     f_p()()
-    //  }"
-    // .to_owned();
+    text.data = "{
+        _:;x;{x} # identity function since we can't use parenthesis in expressions #
+                  
+        printDigit: ;num; print(48+num)
+    
+        newline: ;; print(10)
+
+        printDigit(7)
+        69
+    }"
+    .to_owned();
 
     let mut args = args();
     let debug = args.any(|arg| arg.eq("-d"));
