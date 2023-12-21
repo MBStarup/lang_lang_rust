@@ -1,5 +1,12 @@
 use core::panic;
-use std::{collections::VecDeque, env::args, fmt::Debug, iter::Peekable};
+use std::{
+    collections::VecDeque,
+    env::args,
+    fmt::Debug,
+    fs::{self, File},
+    io::{stdout, Write},
+    iter::Peekable,
+};
 
 struct CharProvider {
     position: usize,
@@ -678,78 +685,45 @@ struct SymbolTableEntry {
     position: i32,
 }
 
+struct CmdArgs {
+    debug: bool,
+    out_path: Option<String>,
+    src_path: String,
+}
+
+impl CmdArgs {
+    fn parse(mut arg_list: std::env::Args) -> CmdArgs {
+        let mut debug = false;
+        let mut out_path = None;
+        let mut src_path = None;
+
+        while let Some(arg) = arg_list.next() {
+            match &arg[..] {
+                "-d" => debug = true,
+                "-o" => out_path = Some(arg_list.next().expect("provide output location after -o flag like: -o ./foo.asm")),
+                path => src_path = Some(path.to_string()),
+            }
+        }
+
+        CmdArgs { debug, out_path, src_path: src_path.expect("Please provide a src file") }
+    }
+}
+
 #[allow(dead_code, unused, unused_mut)]
 fn main() {
-    let mut text = CharProvider {
-        position: 0,
-        data: "
-              {
-                  # My giga scuffed standard library LULE #
-                  
-                  _:;x;{x} # identity function since we can't use parenthesis in expressions #
-                  
-                  printDigit: ;num; print(48+num)
-              
-                  newline: ;; print(10)
-                  
-                  if: ;bool action; { res:0 bool & res:action() res } # if statement using short circuit evaluation. Returns 0 if it didn't run, otherwise return the result of the action #
-                  ifElse: ;bool ifAction elseAction; { res:elseAction bool & { res:ifAction 1 } res() } 
-                  
-                  !: ;bool; bool = 0
-              
-                  loopWithBase: ;predicate action base; { # Takes a predicate acting on the loop count, and an action acting on the loop count to perform while the predicate evaluates true #
-                  
-                      recusiveHelper: ;count prev; {
-                      
-                          ifElse(predicate(count + 1) ;;recusiveHelper(count + 1 action(count prev)) ;;action(count prev))
-                                                                                    
-                      }
-                      
-                      ifElse(predicate(0) ;;recusiveHelper(0 base) ;;base )
-                  }
-              
-                  pow: ;base exponent; loopWithBase(;i; {i < exponent + 1} ;i res; {res * base} 1)/base
-              
-                  printNum: ;x; { # xd no shot I figure out how to do this with the loop func, garbage lang #
-                      
-                      recusiveHelper: ;i prev; {
-                          if(_(prev/10) > 0 ;;recusiveHelper(i + 1 prev/10))
-                          printDigit(prev - _( _(prev/10) * 10))                                           
-                      }
-                      
-                      if(x > 0 ;;recusiveHelper(0 x))
-                  }
-              
-                  # stdlib end #
-              
-                  newline()
-                  printNum(pow(3 10))
-                  newline()
-              }
-              "
-        .to_owned(),
-    };
+    let cmd_args = CmdArgs::parse(args());
 
-    text.data = "{
-        _:;x;{x} # identity function since we can't use parenthesis in expressions #
-                  
-        printDigit: ;num; print(48+num)
-    
-        newline: ;; print(10)
+    let mut text = CharProvider { position: 0, data: fs::read_to_string(&cmd_args.src_path).expect(&format!("Unable to read file: {}\n\t", &cmd_args.src_path)) };
 
-        printDigit(7)
-        69
-    }"
-    .to_owned();
-
-    let mut args = args();
-    let debug = args.any(|arg| arg.eq("-d"));
-
-    let mut lexer = LoggingIter::new(TokenProvider::new(&mut text), debug);
+    let mut lexer = LoggingIter::new(TokenProvider::new(&mut text), cmd_args.debug);
     let mut ast = parse(lexer).expect("Empty ast");
-    // println!("AST:\n{ast:?}\n");
+    eprintln!("AST:\n{ast:?}\n");
     let mut symbol_stack: VecDeque<(VecDeque<SymbolTableEntry>, i32)> = VecDeque::new();
     symbol_stack.push_front((VecDeque::new(), 0)); //global scope
-    let mut asm = compile_to_asm(ast, &mut symbol_stack);
-    println!("{asm}")
+    let asm = compile_to_asm(ast, &mut symbol_stack);
+
+    match cmd_args.out_path {
+        Some(path) => File::create(&path).expect(&format!("unable to access output file: {path}")).write_all(asm.as_bytes()),
+        None => stdout().write_all(asm.as_bytes()),
+    };
 }
